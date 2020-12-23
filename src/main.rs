@@ -273,8 +273,8 @@ impl Component for Model {
                             let p0RelMass = p0InvMass/totalMass;
                             let p1RelMass = p1InvMass/totalMass;
 
-                            let p0Correction = -residual * p0RelMass * normal;
-                            let p1Correction = residual * p1RelMass * normal;
+                            let p0Correction = - 0.2*residual * p0RelMass * normal;
+                            let p1Correction = 0.2*residual * p1RelMass * normal;
     
                             if self.do_jacobi
                             {
