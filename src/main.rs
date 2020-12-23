@@ -1,13 +1,13 @@
-#![recursion_limit="256"]
+#![recursion_limit="512"]
 
 use wasm_bindgen::JsCast;
-use web_sys::{HtmlCanvasElement, WebGlRenderingContext as GL, MouseEvent};
+use web_sys::{HtmlCanvasElement, WebGlRenderingContext as GL};
 use yew::services::render::RenderTask;
 use yew::services::{RenderService, ConsoleService};
 use yew::services::resize::WindowDimensions;
-use yew::{html, Component, ComponentLink, Html, NodeRef, ShouldRender, Callback};
+use yew::{html, Component, ComponentLink, Html, NodeRef, ShouldRender};
+use yew::events::InputData;
 use glam::*;
-use std::hash::{Hash, Hasher};
 
 pub enum SimType
 {
@@ -18,7 +18,8 @@ pub enum SimType
 pub enum Msg {
     Render(f64),
     ResetClicked,
-    SimTypeClicked(SimType)
+    SimTypeClicked(SimType),
+    NumIterationsChanged(InputData),
 }
 
 pub struct Constraint
@@ -26,6 +27,7 @@ pub struct Constraint
     p0 : usize,
     p1 : usize,
     length: f32,
+    cached_normal : Vec3
 }
 
 
@@ -119,6 +121,11 @@ impl Component for Model {
 
     fn update(&mut self, msg: Self::Message) -> ShouldRender {
         match msg {
+            Msg::NumIterationsChanged(e) =>
+            {
+                self.num_iterations = e.value.parse().unwrap();
+                true
+            }
             Msg::SimTypeClicked(t)=> {
                 match t {
                     SimType::Jacobi => {
@@ -169,8 +176,10 @@ impl Component for Model {
                         {
                             let p0 = (i*self.num_particles_y + j) as usize;
                             let p1 = (i*self.num_particles_y + j + 1) as usize;
-                            let length = (self.current_positions[p0] - self.current_positions[p1]).length();
-                            self.constraints.push(Constraint {p0, p1, length});
+                            let v0 = self.current_positions[p0];
+                            let v1 = self.current_positions[p1];
+                            let length = (v0 - v1).length();
+                            self.constraints.push(Constraint {p0, p1, length, cached_normal:(v1-v0).normalize()});
                         }
                     }
 
@@ -180,8 +189,10 @@ impl Component for Model {
                         {
                             let p0 = (i*self.num_particles_y + j) as usize;
                             let p1 = ((i+1)*self.num_particles_y + j) as usize;
-                            let length = (self.current_positions[p0] - self.current_positions[p1]).length();
-                            self.constraints.push(Constraint {p0, p1, length});
+                            let v0 = self.current_positions[p0];
+                            let v1 = self.current_positions[p1];
+                            let length = (v0 - v1).length();
+                            self.constraints.push(Constraint {p0, p1, length, cached_normal:(v1-v0).normalize()});
                         }
                     }
 
@@ -191,13 +202,17 @@ impl Component for Model {
                         {
                             let p0 = (i*self.num_particles_y + j) as usize;
                             let p1 = ((i+1)*self.num_particles_y + j + 1) as usize;
-                            let length = (self.current_positions[p0] - self.current_positions[p1]).length();
-                            self.constraints.push(Constraint {p0, p1, length});
+                            let v0 = self.current_positions[p0];
+                            let v1 = self.current_positions[p1];
+                            let length = (v0 - v1).length();
+                            self.constraints.push(Constraint {p0, p1, length, cached_normal:(v1-v0).normalize()});
 
                             let p0 = ((i+1)*self.num_particles_y + j) as usize;
                             let p1 = (i*self.num_particles_y + j + 1) as usize;
-                            let length = (self.current_positions[p0] - self.current_positions[p1]).length();
-                            self.constraints.push(Constraint {p0, p1, length});
+                            let v0 = self.current_positions[p0];
+                            let v1 = self.current_positions[p1];
+                            let length = (v0 - v1).length();
+                            self.constraints.push(Constraint {p0, p1, length, cached_normal:(v1-v0).normalize()});
                         }
                     }
 
@@ -263,8 +278,8 @@ impl Component for Model {
     
                             if self.do_jacobi
                             {
-                                self.workspace[c.p0] += 0.2*p0Correction;
-                                self.workspace[c.p1] += 0.2*p1Correction;
+                                self.workspace[c.p0] += p0Correction;
+                                self.workspace[c.p1] += p1Correction;
                             }
                             else
                             {
@@ -311,11 +326,14 @@ impl Component for Model {
                         <form action="/action_page.php">
                             <input type="radio" id="jacobi" name="sim_type" value="Jacobi" onclick={self.link.callback(|_| Msg::SimTypeClicked(SimType::Jacobi))}/>
                             <label for="jacobi">{"Jacobi"}</label>
-                            <input type="radio" id="gs" name="sim_type" value="Gauss-Seidel" onclick={self.link.callback(|_| Msg::SimTypeClicked(SimType::GaussSeidel))}/>
+                            <input type="radio" id="gs" name="sim_type" value="Gauss-Seidel" checked=true onclick={self.link.callback(|_| Msg::SimTypeClicked(SimType::GaussSeidel))}/>
                             <label for="gs">{"Gauss-Seidel"}</label>
+                            <br/>
+                            <p>{&format!("Num Iterations: {}", self.num_iterations)}</p>
+                            <input type="range" min="1" max="20" value={self.num_iterations} oninput={self.link.callback(|e| Msg::NumIterationsChanged(e))}/>
                         </form>
                     </div>
-                    <button class="button" onclick={self.link.callback(|_: MouseEvent| Msg::ResetClicked)}>{"Reset"}</button>
+                    <button class="button" onclick={self.link.callback(|_| Msg::ResetClicked)}>{"Reset"}</button>
                 </div>
             </div>
         }
