@@ -456,6 +456,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5a972e5669d67ba988ce3dc826706fb0a8b01471c088cb0b6110b805cc36aed"
 
 [[package]]
+name = "warmstart"
+version = "0.1.0"
+dependencies = [
+ "glam",
+ "js-sys",
+ "wasm-bindgen",
+ "web-sys",
+ "yew",
+]
+
+[[package]]
 name = "wasm-bindgen"
 version = "0.2.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -529,17 +540,6 @@ checksum = "222b1ef9334f92a21d3fb53dc3fd80f30836959a90f9274a626d7e06315ba3c3"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "webgl"
-version = "0.1.0"
-dependencies = [
- "glam",
- "js-sys",
- "wasm-bindgen",
- "web-sys",
- "yew",
 ]
 
 [[package]]

@@ -1,7 +1,7 @@
 [package]
-name = "webgl"
+name = "warmstart"
 version = "0.1.0"
-authors = ["Miklós Tusz <mdtusz@gmail.com>"]
+authors = ["Chris Lewin <antialiased@gmail.com>"]
 edition = "2018"
 
 [dependencies]

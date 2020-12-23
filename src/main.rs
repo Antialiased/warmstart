@@ -1,14 +1,24 @@
+#![recursion_limit="256"]
+
 use wasm_bindgen::JsCast;
-use web_sys::{HtmlCanvasElement, WebGlRenderingContext as GL};
+use web_sys::{HtmlCanvasElement, WebGlRenderingContext as GL, MouseEvent};
 use yew::services::render::RenderTask;
 use yew::services::{RenderService, ConsoleService};
 use yew::services::resize::WindowDimensions;
-use yew::{html, Component, ComponentLink, Html, NodeRef, ShouldRender};
+use yew::{html, Component, ComponentLink, Html, NodeRef, ShouldRender, Callback};
 use glam::*;
 use std::hash::{Hash, Hasher};
 
+pub enum SimType
+{
+    Jacobi,
+    GaussSeidel,
+}
+
 pub enum Msg {
     Render(f64),
+    ResetClicked,
+    SimTypeClicked(SimType)
 }
 
 pub struct Constraint
@@ -33,9 +43,14 @@ pub struct Model {
     num_constraints : usize,
     current_positions : Vec<Vec3>,
     previous_positions : Vec<Vec3>,
+    workspace:Vec<Vec3>,
     is_fixed: Vec<bool>,
     constraints : Vec<Constraint>,
     prev_timestamp : f64,
+    target_dt: f32,
+    num_iterations : i32,
+    do_jacobi : bool,
+    do_reset: bool,
 }
 
 impl Component for Model {
@@ -55,11 +70,16 @@ impl Component for Model {
             num_particles_y : 10,
             current_positions: vec![],
             previous_positions: vec![],
+            workspace:vec![],
             is_fixed : vec![],
             constraints : vec![],
             num_particles : 0,
             num_constraints : 0, 
             prev_timestamp : 0.0f64,
+            target_dt : 1.0 / 60.0,
+            num_iterations : 1,
+            do_jacobi : false,
+            do_reset: true,
         }
     }
 
@@ -99,12 +119,28 @@ impl Component for Model {
 
     fn update(&mut self, msg: Self::Message) -> ShouldRender {
         match msg {
+            Msg::SimTypeClicked(t)=> {
+                match t {
+                    SimType::Jacobi => {
+                        self.do_jacobi = true;
+                    }
+                    SimType::GaussSeidel => {
+                        self.do_jacobi = false;
+                    }
+                }
+                false
+            }
+            Msg::ResetClicked => {
+                self.do_reset = true;
+                false
+            }
             Msg::Render(timestamp) => {
 
-                let do_reset = self.current_positions.len() == 0;
+                let do_reset = self.do_reset;
 
                 if do_reset
                 {
+                    self.do_reset = false;
                     self.prev_timestamp = timestamp;
 
                     self.current_positions.clear();
@@ -125,6 +161,7 @@ impl Component for Model {
                     }
 
                     self.previous_positions = self.current_positions.clone();
+                    self.workspace = self.current_positions.clone();
 
                     for i in 0..self.num_particles_x
                     {
@@ -132,9 +169,7 @@ impl Component for Model {
                         {
                             let p0 = (i*self.num_particles_y + j) as usize;
                             let p1 = (i*self.num_particles_y + j + 1) as usize;
-
                             let length = (self.current_positions[p0] - self.current_positions[p1]).length();
-
                             self.constraints.push(Constraint {p0, p1, length});
                         }
                     }
@@ -145,9 +180,23 @@ impl Component for Model {
                         {
                             let p0 = (i*self.num_particles_y + j) as usize;
                             let p1 = ((i+1)*self.num_particles_y + j) as usize;
-
                             let length = (self.current_positions[p0] - self.current_positions[p1]).length();
+                            self.constraints.push(Constraint {p0, p1, length});
+                        }
+                    }
 
+                    for i in 0..self.num_particles_x -1
+                    {
+                        for j in 0..self.num_particles_y - 1
+                        {
+                            let p0 = (i*self.num_particles_y + j) as usize;
+                            let p1 = ((i+1)*self.num_particles_y + j + 1) as usize;
+                            let length = (self.current_positions[p0] - self.current_positions[p1]).length();
+                            self.constraints.push(Constraint {p0, p1, length});
+
+                            let p0 = ((i+1)*self.num_particles_y + j) as usize;
+                            let p1 = (i*self.num_particles_y + j + 1) as usize;
+                            let length = (self.current_positions[p0] - self.current_positions[p1]).length();
                             self.constraints.push(Constraint {p0, p1, length});
                         }
                     }
@@ -157,29 +206,80 @@ impl Component for Model {
                 }
 
                 let delta_time = (timestamp - self.prev_timestamp) as f32 / 1000.0;
-                ConsoleService::log(&format!("delta_time: {}", delta_time));
-                self.prev_timestamp = timestamp;
 
-                let gravity = vec3(0.0f32, -9.8f32*0.01, 0.0f32);
-
-                for i in 0..self.num_particles
+                if delta_time >= self.target_dt
                 {
-                    let mut p = self.current_positions[i];
-                    let p0 = p;
-                    let pm1 = self.previous_positions[i];
+                    //ConsoleService::log(&format!("delta_time: {}", delta_time));
+                    self.prev_timestamp = timestamp;
 
-                    let is_fixed = self.is_fixed[i];
+                    let gravity = vec3(0.0f32, -9.8f32, 0.0f32) * 0.1;
 
-                    if !is_fixed {
-                        let mut v = (p-pm1) * (1.0f32 / delta_time);
-                        v = v + gravity*delta_time;
-                        p = p + v*delta_time / 1000.0; 
+                    for i in 0..self.num_particles
+                    {
+                        let mut p = self.current_positions[i];
+                        let p0 = p;
+                        let pm1 = self.previous_positions[i];
+
+                        let is_fixed = self.is_fixed[i];
+
+                        if !is_fixed {
+                            let mut d = p-pm1;
+                            d = d + gravity*self.target_dt;
+                            p = p + d; 
+                        }
+
+                        self.current_positions[i] = p;
+                        self.previous_positions[i] = p0;
+
+                        self.workspace[i] = p;
                     }
+                    
+                    for iteration in 0..self.num_iterations
+                    {
+                        if self.do_jacobi {self.workspace = self.current_positions.clone()}
 
-                    self.current_positions[i] = p;
-                    self.previous_positions[i] = p0;
+                        for i in 0..self.num_constraints
+                        {
+                            let c = &self.constraints[i];
+    
+                            let mut p0 = self.current_positions[c.p0];
+                            let mut p1 = self.current_positions[c.p1];
+    
+                            let len = (p0 - p1).length();
+    
+                            let normal = (p0-p1) / len;
+    
+                            let residual = len - c.length;
+    
+                            let p0InvMass = if self.is_fixed[c.p0] {0.0f32} else {1.0f32};
+                            let p1InvMass = if self.is_fixed[c.p1] {0.0f32} else {1.0f32};
+                            let totalMass = p0InvMass + p1InvMass;
+    
+                            let p0RelMass = p0InvMass/totalMass;
+                            let p1RelMass = p1InvMass/totalMass;
+
+                            let p0Correction = -residual * p0RelMass * normal;
+                            let p1Correction = residual * p1RelMass * normal;
+    
+                            if self.do_jacobi
+                            {
+                                self.workspace[c.p0] += 0.2*p0Correction;
+                                self.workspace[c.p1] += 0.2*p1Correction;
+                            }
+                            else
+                            {
+                                p0 += p0Correction;
+                                p1 += p1Correction;
+    
+                                self.current_positions[c.p0] = p0;
+                                self.current_positions[c.p1] = p1;
+                            }
+                        }
+
+                        if self.do_jacobi {self.current_positions = self.workspace.clone()}
+                    }
                 }
-
+                
                 // Render functions are likely to get quite large, so it is good practice to split
                 // it into it's own function rather than keeping it inline in the update match
                 // case. This also allows for updating other UI elements that may be rendered in
@@ -202,14 +302,20 @@ impl Component for Model {
 
     fn view(&self) -> Html {
         html! {
-            <div id="container">
+            <div id="container" style="display:flex">
                 <canvas ref=self.node_ref.clone() width={self.width} height={self.height} style="position: absolute"/>
-                <div id="overlay" style="position: absolute">
-                    <button class="button button1">{"2px"}</button>
-                    <button class="button button2">{"4px"}</button>
-                    <button class="button button3">{"8px"}</button>
-                    <button class="button button4">{"12px"}</button>
-                    <button class="button button5">{"50%"}</button>
+                <div id="overlay" style="position: absolute; display:flex; width:20vw; flex-direction:column"> 
+                    <div id="sim_type_selector" style="border: 1px solid;
+                    padding: 2px;
+                    padding-right: 4px;">
+                        <form action="/action_page.php">
+                            <input type="radio" id="jacobi" name="sim_type" value="Jacobi" onclick={self.link.callback(|_| Msg::SimTypeClicked(SimType::Jacobi))}/>
+                            <label for="jacobi">{"Jacobi"}</label>
+                            <input type="radio" id="gs" name="sim_type" value="Gauss-Seidel" onclick={self.link.callback(|_| Msg::SimTypeClicked(SimType::GaussSeidel))}/>
+                            <label for="gs">{"Gauss-Seidel"}</label>
+                        </form>
+                    </div>
+                    <button class="button" onclick={self.link.callback(|_: MouseEvent| Msg::ResetClicked)}>{"Reset"}</button>
                 </div>
             </div>
         }
