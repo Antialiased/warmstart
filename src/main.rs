@@ -20,6 +20,8 @@ pub enum Msg {
     ResetClicked,
     SimTypeClicked(SimType),
     NumIterationsChanged(InputData),
+    StiffnessChanged(InputData),
+    WarmStartChanged,
 }
 
 pub struct Constraint
@@ -27,7 +29,29 @@ pub struct Constraint
     p0 : usize,
     p1 : usize,
     length: f32,
-    cached_normal : Vec3
+    lambda : f32,
+    normal: Vec3,
+    c_zero : f32,
+    c_one : f32,
+    lambda_zero : f32,
+    lambda_one : f32,
+}
+
+impl Constraint {
+    fn new(p0 : usize, p1 : usize, positions : &[Vec3]) -> Constraint
+    {
+        Constraint {
+            p0 : p0,
+            p1 : p1,
+            length : (positions[p0] - positions[p1]).length(),
+            lambda : 0.0f32,
+            normal: (positions[p0] - positions[p1]).normalize(),
+            c_zero : 0.0f32,
+            c_one : 0.0f32,
+            lambda_zero : 0.0f32,
+            lambda_one : 0.0f32,
+        }
+    }
 }
 
 
@@ -45,7 +69,7 @@ pub struct Model {
     num_constraints : usize,
     current_positions : Vec<Vec3>,
     previous_positions : Vec<Vec3>,
-    workspace:Vec<Vec3>,
+    total_impulse : Vec<Vec3>,
     is_fixed: Vec<bool>,
     constraints : Vec<Constraint>,
     prev_timestamp : f64,
@@ -53,6 +77,8 @@ pub struct Model {
     num_iterations : i32,
     do_jacobi : bool,
     do_reset: bool,
+    stiffness : f32,
+    warm_start : bool
 }
 
 impl Component for Model {
@@ -72,7 +98,7 @@ impl Component for Model {
             num_particles_y : 10,
             current_positions: vec![],
             previous_positions: vec![],
-            workspace:vec![],
+            total_impulse : vec![],
             is_fixed : vec![],
             constraints : vec![],
             num_particles : 0,
@@ -82,6 +108,8 @@ impl Component for Model {
             num_iterations : 1,
             do_jacobi : false,
             do_reset: true,
+            stiffness : 1e10f32,
+            warm_start : true,
         }
     }
 
@@ -121,6 +149,23 @@ impl Component for Model {
 
     fn update(&mut self, msg: Self::Message) -> ShouldRender {
         match msg {
+            Msg::WarmStartChanged =>
+            {
+                self.warm_start = !self.warm_start;
+                true
+            }
+            Msg::StiffnessChanged(e) =>
+            {
+                match e.value.parse::<f32>()
+                {
+                    Ok(f) =>
+                    {
+                        self.stiffness = f;
+                    }
+                    Err(_) => {}
+                }
+                true
+            }
             Msg::NumIterationsChanged(e) =>
             {
                 self.num_iterations = e.value.parse().unwrap();
@@ -152,6 +197,7 @@ impl Component for Model {
 
                     self.current_positions.clear();
                     self.previous_positions.clear();
+                    self.total_impulse.clear();
                     self.is_fixed.clear();
                     self.constraints.clear();
 
@@ -162,13 +208,13 @@ impl Component for Model {
                             let xpos = i as f32 / self.num_particles_x as f32 - 0.5f32;
                             let ypos = j as f32 / self.num_particles_y as f32 - 0.5f32;
                             self.current_positions.push(vec3(xpos, -ypos, 0.0f32));
+                            self.total_impulse.push(vec3(0.0, 0.0, 0.0));
 
                             self.is_fixed.push(j == 0 && (i == 0 || i == self.num_particles_x-1));
                         }
                     }
 
                     self.previous_positions = self.current_positions.clone();
-                    self.workspace = self.current_positions.clone();
 
                     for i in 0..self.num_particles_x
                     {
@@ -176,10 +222,7 @@ impl Component for Model {
                         {
                             let p0 = (i*self.num_particles_y + j) as usize;
                             let p1 = (i*self.num_particles_y + j + 1) as usize;
-                            let v0 = self.current_positions[p0];
-                            let v1 = self.current_positions[p1];
-                            let length = (v0 - v1).length();
-                            self.constraints.push(Constraint {p0, p1, length, cached_normal:(v1-v0).normalize()});
+                            self.constraints.push(Constraint::new(p0, p1, &self.current_positions));
                         }
                     }
 
@@ -189,10 +232,8 @@ impl Component for Model {
                         {
                             let p0 = (i*self.num_particles_y + j) as usize;
                             let p1 = ((i+1)*self.num_particles_y + j) as usize;
-                            let v0 = self.current_positions[p0];
-                            let v1 = self.current_positions[p1];
-                            let length = (v0 - v1).length();
-                            self.constraints.push(Constraint {p0, p1, length, cached_normal:(v1-v0).normalize()});
+                            self.constraints.push(Constraint::new(p0, p1, &self.current_positions));
+
                         }
                     }
 
@@ -202,17 +243,11 @@ impl Component for Model {
                         {
                             let p0 = (i*self.num_particles_y + j) as usize;
                             let p1 = ((i+1)*self.num_particles_y + j + 1) as usize;
-                            let v0 = self.current_positions[p0];
-                            let v1 = self.current_positions[p1];
-                            let length = (v0 - v1).length();
-                            self.constraints.push(Constraint {p0, p1, length, cached_normal:(v1-v0).normalize()});
+                            self.constraints.push(Constraint::new(p0, p1, &self.current_positions));
 
                             let p0 = ((i+1)*self.num_particles_y + j) as usize;
                             let p1 = (i*self.num_particles_y + j + 1) as usize;
-                            let v0 = self.current_positions[p0];
-                            let v1 = self.current_positions[p1];
-                            let length = (v0 - v1).length();
-                            self.constraints.push(Constraint {p0, p1, length, cached_normal:(v1-v0).normalize()});
+                            self.constraints.push(Constraint::new(p0, p1, &self.current_positions));
                         }
                     }
 
@@ -245,41 +280,67 @@ impl Component for Model {
 
                         self.current_positions[i] = p;
                         self.previous_positions[i] = p0;
-
-                        self.workspace[i] = p;
                     }
+
+                    
+
+                    for i in 0..self.num_constraints
+                    {
+                        //self.constraints[i].lambda = 0.0f32;
+                    }
+
+                    let aTilde = 1.0f32 / (self.stiffness * self.target_dt * self.target_dt);
+                    let mut workspace = vec![vec4(0.0,0.0,0.0,0.0); self.num_particles];
                     
                     for iteration in 0..self.num_iterations
                     {
-                        if self.do_jacobi {self.workspace = self.current_positions.clone()}
-
-                        for i in 0..self.num_constraints
+                        for constraint_index in 0..self.num_constraints
                         {
-                            let c = &self.constraints[i];
-    
-                            let mut p0 = self.current_positions[c.p0];
-                            let mut p1 = self.current_positions[c.p1];
-    
-                            let len = (p0 - p1).length();
-    
-                            let normal = (p0-p1) / len;
-    
-                            let residual = len - c.length;
+                            let mut i = constraint_index;
+
+                            if !self.do_jacobi && iteration % 2 == 1{
+                                i = self.num_constraints - i - 1;
+                            }
+                            let mut c = &mut self.constraints[i];
     
                             let p0InvMass = if self.is_fixed[c.p0] {0.0f32} else {1.0f32};
                             let p1InvMass = if self.is_fixed[c.p1] {0.0f32} else {1.0f32};
-                            let totalMass = p0InvMass + p1InvMass;
-    
-                            let p0RelMass = p0InvMass/totalMass;
-                            let p1RelMass = p1InvMass/totalMass;
+                            let totalInvMass = p0InvMass + p1InvMass;
+                            let p0RelMass = p0InvMass/totalInvMass;
+                            let p1RelMass = p1InvMass/totalInvMass;
 
-                            let p0Correction = - 0.2*residual * p0RelMass * normal;
-                            let p1Correction = 0.2*residual * p1RelMass * normal;
+                            let mut p0 = self.current_positions[c.p0];
+                            let mut p1 = self.current_positions[c.p1];
+                            
+
+                            let len = (p0-p1).length();
+                            let normal = (p0-p1)/len;
+    
+                            let mut residual = len - c.length;
+
+                            let mut deltaLambda = -(residual + aTilde*c.lambda) / (totalInvMass + aTilde);
+                            if iteration == 0 && self.warm_start{
+                                deltaLambda += 0.5f32*c.lambda;
+                                c.lambda = 0.0f32;
+                            }
+                            else if iteration == 0
+                            {
+                                c.lambda = 0.0f32;
+                            }
+                            c.lambda += deltaLambda;
+
+                            if constraint_index == 1
+                            {
+                                ConsoleService::log(&format!("deltaLambda: {}", deltaLambda));
+                            }
+
+                            let p0Correction = deltaLambda * p0RelMass * normal;
+                            let p1Correction = -deltaLambda * p1RelMass * normal;
     
                             if self.do_jacobi
                             {
-                                self.workspace[c.p0] += p0Correction;
-                                self.workspace[c.p1] += p1Correction;
+                                workspace[c.p0] += vec4(p0Correction.x, p0Correction.y, p0Correction.z, 1.0);
+                                workspace[c.p1] += vec4(p1Correction.x, p1Correction.y, p1Correction.z, 1.0);
                             }
                             else
                             {
@@ -291,7 +352,26 @@ impl Component for Model {
                             }
                         }
 
-                        if self.do_jacobi {self.current_positions = self.workspace.clone()}
+                        if self.do_jacobi {
+                            for i in 0..self.num_particles {
+                                let impulse = workspace[i];
+                                self.current_positions[i] += vec3(impulse.x, impulse.y, impulse.z) / impulse.w;
+                                workspace[i] = vec4(0.0, 0.0, 0.0, 0.0);
+                            }
+                        }
+
+                        for i in 0..self.num_constraints {
+                            let mut c = &mut self.constraints[i];
+
+                            let p0 = self.current_positions[c.p0];
+                            let p1 = self.current_positions[c.p1];
+
+                            let len = (p0 - p1).length();
+                            c.c_one = len - c.length;
+
+                            c.lambda_zero = c.lambda_one;
+                            c.lambda_one = c.lambda;
+                        }
                     }
                 }
                 
@@ -320,20 +400,23 @@ impl Component for Model {
             <div id="container" style="display:flex">
                 <canvas ref=self.node_ref.clone() width={self.width} height={self.height} style="position: absolute"/>
                 <div id="overlay" style="position: absolute; display:flex; width:20vw; flex-direction:column"> 
-                    <div id="sim_type_selector" style="border: 1px solid;
+                    <div id="sim_type_selector" style="background-color:#96DEEB; border-radius:5px; margin-top:10px; margin-left:10px;
                     padding: 2px;
                     padding-right: 4px;">
-                        <form action="/action_page.php">
-                            <input type="radio" id="jacobi" name="sim_type" value="Jacobi" onclick={self.link.callback(|_| Msg::SimTypeClicked(SimType::Jacobi))}/>
+                        <form style="padding-left:10px;" action="/action_page.php">
                             <label for="jacobi">{"Jacobi"}</label>
-                            <input type="radio" id="gs" name="sim_type" value="Gauss-Seidel" checked=true onclick={self.link.callback(|_| Msg::SimTypeClicked(SimType::GaussSeidel))}/>
+                            <input type="radio" id="jacobi" name="sim_type" value="Jacobi" checked =self.do_jacobi onclick={self.link.callback(|_| Msg::SimTypeClicked(SimType::Jacobi))}/>
                             <label for="gs">{"Gauss-Seidel"}</label>
-                            <br/>
-                            <p>{&format!("Num Iterations: {}", self.num_iterations)}</p>
-                            <input type="range" min="1" max="20" value={self.num_iterations} oninput={self.link.callback(|e| Msg::NumIterationsChanged(e))}/>
+                            <input type="radio" id="gs" name="sim_type" value="Gauss-Seidel" checked=!self.do_jacobi onclick={self.link.callback(|_| Msg::SimTypeClicked(SimType::GaussSeidel))}/><br/>
+                            <label for="iterations">{&format!("Iterations: {}", self.num_iterations)}</label>
+                            <input type="range" id="iterations" min="1" max="200" value={self.num_iterations} oninput={self.link.callback(|e| Msg::NumIterationsChanged(e))}/><br/>
+                            <label for="stiffness">{"Stiffness"}</label>
+                            <input type="number" style="background-color:#fff5fc; margin-left:10px; border:none" id="stiffness" value={self.stiffness} oninput={self.link.callback(|e| Msg::StiffnessChanged(e))}/><br/>
+                            <label for="warm_start">{"Warm Start"}</label>
+                            <input type="checkbox" id="warm_start" checked =self.warm_start onclick={self.link.callback(|_| Msg::WarmStartChanged)}/><br/>
                         </form>
+                        <button class="button" style="background-color:#5756EB" onclick={self.link.callback(|_| Msg::ResetClicked)}>{"Reset"}</button>
                     </div>
-                    <button class="button" onclick={self.link.callback(|_| Msg::ResetClicked)}>{"Reset"}</button>
                 </div>
             </div>
         }
@@ -412,13 +495,13 @@ impl Model {
 
         let color_uniform = gl.get_uniform_location(&shader_program, "u_color");
 
-        gl.uniform3f(color_uniform.as_ref(), vcolor[0], vcolor[1], vcolor[2]);
-
-        gl.draw_arrays(GL::POINTS, 0, particle_count);
-
         gl.uniform3f(color_uniform.as_ref(), lcolor[0], lcolor[1], lcolor[2]);
 
         gl.draw_elements_with_i32(GL::LINES, line_count, GL::UNSIGNED_INT, 0);
+
+        gl.uniform3f(color_uniform.as_ref(), vcolor[0], vcolor[1], vcolor[2]);
+
+        gl.draw_arrays(GL::POINTS, 0, particle_count);
 
         let render_frame = self.link.callback(Msg::Render);
         let handle = RenderService::request_animation_frame(render_frame);
